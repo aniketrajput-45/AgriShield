@@ -11,12 +11,12 @@ To provide remote farmers with instant, offline-capable crop disease diagnosis a
 ## MVP Features & Owners
 | Feature | Description | Status |
 | :--- | :--- | :--- |
-| **Edge Inference** | `.tflite` integration for offline scan. | Pending |
-| **AI Diagnosis** | Name + Confidence score return. | Placeholder |
-| **Advisory** | Treatment suggestions based on result. | Pending |
+| **Edge Inference** | `.tflite` integration for offline scan. | Implemented |
+| **AI Diagnosis** | Name + Confidence score return. | Implemented (Inference API) |
+| **Advisory** | Treatment suggestions based on result. | Implemented (Mistral-7B) |
 | **NPK Calculator** | DSA tool for fertilizer dosage. | Pending |
-| **Weather Risk** | OpenWeatherMap API integration. | Pending |
-| **Heatmap** | GPS-based outbreak tracking. | Pending |
+| **Weather Risk** | OpenWeatherMap API integration. | Implemented (Pending API Key) |
+| **Heatmap** | GPS-based outbreak tracking. | In Progress |
 
 ## API Contract (Draft v1)
 ### `POST /predict`

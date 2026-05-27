@@ -1,20 +1,57 @@
-import React, { useState, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, StatusBar, Alert, ScrollView, TextInput, Modal } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, StatusBar, Alert, ScrollView, TextInput, Modal, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 import { calculateNPK } from './src/services/fertilizerService';
+import { fetchWeather } from './src/services/weatherService';
+import { analyzeImage } from './src/services/diagnosisService';
 
 export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [showResult, setShowResult] = useState(false);
   const [status, setStatus] = useState("System Ready");
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
+
+  // Weather and Location State
+  const [location, setLocation] = useState(null);
+  const [weather, setWeather] = useState(null);
+  const [loadingWeather, setLoadingWeather] = useState(true);
+
+  // Diagnosis Result State
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Fertilizer Form State
   const [plotSize, setPlotSize] = useState('1');
   const [crop, setCrop] = useState('Tomato');
   const [dosage, setDosage] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Allow location access to see weather risks.');
+        setLoadingWeather(false);
+        return;
+      }
+
+      try {
+        let loc = await Location.getCurrentPositionAsync({});
+        setLocation(loc);
+        
+        const weatherData = await fetchWeather(loc.coords.latitude, loc.coords.longitude);
+        setWeather(weatherData);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoadingWeather(false);
+      }
+    })();
+  }, []);
 
   const handleStartScan = async () => {
     if (!permission?.granted) {
@@ -37,17 +74,51 @@ export default function App() {
     setDosage(result);
   };
 
+  const handlePickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Required", "We need gallery access to upload images.");
+      return;
+    }
+
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 1,
+    });
+
+    if (!result.canceled) {
+      processDiagnosis(result.assets[0].uri);
+    }
+  };
+
+  const processDiagnosis = async (imageUri) => {
+    setIsScanning(false);
+    setIsAnalyzing(true);
+    setStatus(`Analyzing ${crop}...`);
+    
+    try {
+      const weatherContext = weather ? `${weather.condition}, ${weather.temp}°C, ${weather.humidity}% humidity` : "";
+      const result = await analyzeImage(imageUri, weatherContext, crop);
+      
+      setDiagnosis(result);
+      setIsAnalyzing(false);
+      setShowResult(true);
+      setStatus("Analysis Complete");
+    } catch (error) {
+      setIsAnalyzing(false);
+      setIsScanning(false);
+      setStatus("Analysis Failed");
+      Alert.alert("Error", "Could not analyze image. Check your backend connection.");
+    }
+  };
+
   const handleCapture = async () => {
     if (cameraRef.current) {
       try {
         const photo = await cameraRef.current.takePictureAsync();
-        setIsScanning(false);
-        setStatus("Analyzing Scan...");
-        
-        setTimeout(() => {
-          setStatus("Health Status: 98% Healthy");
-          Alert.alert("Scan Complete", "Crop appears healthy. No fungal outbreaks detected in your region.");
-        }, 1500);
+        processDiagnosis(photo.uri);
       } catch (error) {
         Alert.alert("Error", "Capture failed.");
       }
@@ -58,33 +129,39 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.cameraContainer}>
-          <CameraView ref={cameraRef} style={styles.fullCamera} facing="back">
-            <SafeAreaView style={styles.cameraOverlay}>
-              <View style={styles.cameraHeader}>
-                <TouchableOpacity onPress={() => setIsScanning(false)}>
-                  <Text style={styles.closeText}>✕ Close</Text>
-                </TouchableOpacity>
-                <Text style={styles.cameraTitle}>Leaf Scanner</Text>
-                <View style={{ width: 60 }} />
+          <CameraView ref={cameraRef} style={styles.fullCamera} facing="back" />
+          
+          <SafeAreaView style={[styles.cameraOverlay, StyleSheet.absoluteFill]}>
+            <View style={styles.cameraHeader}>
+              <TouchableOpacity onPress={() => setIsScanning(false)}>
+                <Text style={styles.closeText}>✕ Close</Text>
+              </TouchableOpacity>
+              <Text style={styles.cameraTitle}>Leaf Scanner</Text>
+              <View style={{ width: 60 }} />
+            </View>
+            
+            <View style={styles.vignette}>
+              <View style={styles.targetFrame}>
+                <View style={[styles.corner, styles.topLeft]} />
+                <View style={[styles.corner, styles.topRight]} />
+                <View style={[styles.corner, styles.bottomLeft]} />
+                <View style={[styles.corner, styles.bottomRight]} />
               </View>
-              
-              <View style={styles.vignette}>
-                <View style={styles.targetFrame}>
-                  <View style={[styles.corner, styles.topLeft]} />
-                  <View style={[styles.corner, styles.topRight]} />
-                  <View style={[styles.corner, styles.bottomLeft]} />
-                  <View style={[styles.corner, styles.bottomRight]} />
-                </View>
-              </View>
+            </View>
 
-              <View style={styles.cameraFooter}>
-                <Text style={styles.hintText}>Center the leaf within the frame</Text>
-                <TouchableOpacity style={styles.captureCircle} onPress={handleCapture}>
-                  <View style={styles.captureInner} />
-                </TouchableOpacity>
-              </View>
-            </SafeAreaView>
-          </CameraView>
+            <View style={styles.cameraFooter}>
+              <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
+                <Text style={{fontSize: 24}}>🖼️</Text>
+                <Text style={styles.galleryText}>Gallery</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.captureCircle} onPress={handleCapture}>
+                <View style={styles.captureInner} />
+              </TouchableOpacity>
+
+              <View style={{ width: 60 }} /> 
+            </View>
+          </SafeAreaView>
         </View>
       </SafeAreaProvider>
     );
@@ -105,9 +182,12 @@ export default function App() {
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {/* Status Card */}
-          <View style={[styles.statusCard, { backgroundColor: '#1B5E20' }]}>
+          <View style={[styles.statusCard, { backgroundColor: isAnalyzing ? '#FF8F00' : '#1B5E20' }]}>
             <Text style={styles.statusLabel}>System Status</Text>
-            <Text style={styles.statusValue}>{status}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.statusValue}>{status}</Text>
+              {isAnalyzing && <ActivityIndicator size="small" color="#fff" style={{ marginLeft: 15 }} />}
+            </View>
           </View>
 
           {/* Feature Grid */}
@@ -115,8 +195,18 @@ export default function App() {
             <View style={styles.featureCard}>
               <Text style={styles.cardEmoji}>☁️</Text>
               <Text style={styles.cardTitle}>Weather Risk</Text>
-              <Text style={styles.cardDetail}>High Humidity (82%)</Text>
-              <Text style={styles.cardAlert}>Fungal Risk: Medium</Text>
+              {loadingWeather ? (
+                <ActivityIndicator size="small" color="#2E7D32" style={{ marginTop: 10 }} />
+              ) : weather ? (
+                <>
+                  <Text style={styles.cardDetail}>{weather.condition} ({weather.temp}°C)</Text>
+                  <Text style={[styles.cardAlert, { color: weather.risk === 'High' ? '#D32F2F' : '#2E7D32' }]}>
+                    Fungal Risk: {weather.risk}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.cardDetail}>Weather Unavailable</Text>
+              )}
             </View>
             
             <TouchableOpacity style={styles.featureCard} onPress={() => setIsCalculating(true)}>
@@ -129,13 +219,26 @@ export default function App() {
 
           {/* Main Action Area */}
           <View style={styles.actionSection}>
-            <Text style={styles.sectionTitle}>Diagnose Crop</Text>
+            <Text style={styles.sectionTitle}>Select Crop & Diagnose</Text>
+            
+            <View style={[styles.cropSelector, { marginBottom: 20, backgroundColor: '#fff', padding: 15, borderRadius: 20 }]}>
+                {['Tomato', 'Rice', 'Wheat', 'Maize'].map(c => (
+                  <TouchableOpacity 
+                    key={c} 
+                    style={[styles.cropBtn, crop === c && styles.cropBtnActive]}
+                    onPress={() => setCrop(c)}
+                  >
+                    <Text style={[styles.cropBtnText, crop === c && styles.cropBtnTextActive]}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+            </View>
+
             <TouchableOpacity style={styles.mainScanButton} onPress={handleStartScan}>
               <View style={styles.buttonIconCircle}>
                 <Text style={{fontSize: 30}}>📸</Text>
               </View>
               <View>
-                <Text style={styles.scanButtonTitle}>Start New Scan</Text>
+                <Text style={styles.scanButtonTitle}>Scan {crop}</Text>
                 <Text style={styles.scanButtonSub}>AI Disease Detection</Text>
               </View>
             </TouchableOpacity>
@@ -145,7 +248,16 @@ export default function App() {
           <View style={styles.heatmapCard}>
             <Text style={styles.heatmapTitle}>Regional Outbreak Map</Text>
             <View style={styles.mapPlaceholder}>
-              <Text style={styles.mapText}>Local Heatmap Loading...</Text>
+              {location ? (
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={styles.mapText}>📍 {weather?.city || 'Your Location'}</Text>
+                  <Text style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+                    {location.coords.latitude.toFixed(4)}, {location.coords.longitude.toFixed(4)}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.mapText}>Local Heatmap Loading...</Text>
+              )}
             </View>
           </View>
         </ScrollView>
@@ -211,10 +323,56 @@ export default function App() {
             </View>
           </SafeAreaView>
         </Modal>
+
+        {/* AI Diagnosis Result Modal */}
+        <Modal visible={showResult} animationType="fade" transparent={true}>
+          <View style={styles.modalOverlay}>
+            <SafeAreaView style={styles.resultModalContainer}>
+              <View style={styles.resultHeader}>
+                <Text style={styles.resultModalTitle}>Diagnosis Report</Text>
+                <TouchableOpacity onPress={() => setShowResult(false)}>
+                  <Text style={styles.closeModalText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.resultBody}>
+                {diagnosis && (
+                  <>
+                    <View style={styles.diseaseInfoCard}>
+                      <Text style={styles.resLabel}>Detected Condition</Text>
+                      <Text style={styles.diseaseNameText}>{diagnosis.disease}</Text>
+                      <Text style={styles.confidenceText}>
+                        Confidence: {(diagnosis.confidence * 100).toFixed(1)}%
+                      </Text>
+                    </View>
+
+                    <View style={styles.adviceSection}>
+                      <Text style={styles.adviceTitle}>Expert Treatment Plan</Text>
+                      <View style={styles.adviceCard}>
+                        <Text style={styles.adviceText}>{diagnosis.treatment}</Text>
+                      </View>
+                      <Text style={styles.disclaimer}>
+                        * Advice generated by AI Advisor. Consult a local expert before applying chemical treatments.
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                <TouchableOpacity 
+                  style={styles.doneButton} 
+                  onPress={() => setShowResult(false)}
+                >
+                  <Text style={styles.doneButtonText}>Done</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </SafeAreaView>
+          </View>
+        </Modal>
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F4F7F5' },
@@ -330,8 +488,41 @@ const styles = StyleSheet.create({
   topRight: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0 },
   bottomLeft: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0 },
   bottomRight: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0 },
-  cameraFooter: { paddingBottom: 40, alignItems: 'center' },
+  cameraFooter: { 
+    paddingBottom: 40, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-around',
+    paddingHorizontal: 20
+  },
+  galleryButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 65,
+    height: 65,
+    borderRadius: 33,
+  },
+  galleryText: { color: '#fff', fontSize: 10, fontWeight: 'bold', marginTop: 2 },
   hintText: { color: '#fff', fontSize: 14, marginBottom: 20, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 15, paddingVertical: 5, borderRadius: 10 },
   captureCircle: { width: 80, height: 80, borderRadius: 40, borderWidth: 5, borderColor: '#fff', justifyContent: 'center', alignItems: 'center' },
-  captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' }
-});
+  captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' },
+
+  // New Result Modal Styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  resultModalContainer: { backgroundColor: '#fff', borderRadius: 30, maxHeight: '80%', overflow: 'hidden' },
+  resultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  resultModalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1B5E20' },
+  closeModalText: { fontSize: 24, color: '#999', padding: 5 },
+  resultBody: { padding: 20 },
+  diseaseInfoCard: { backgroundColor: '#F1F8E9', padding: 20, borderRadius: 20, marginBottom: 20, alignItems: 'center' },
+  diseaseNameText: { fontSize: 24, fontWeight: 'bold', color: '#2E7D32', marginVertical: 8 },
+  confidenceText: { fontSize: 14, color: '#666' },
+  adviceSection: { marginBottom: 25 },
+  adviceTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 12 },
+  adviceCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#E0E0E0', padding: 15, borderRadius: 15 },
+  adviceText: { fontSize: 16, color: '#444', lineHeight: 24 },
+  disclaimer: { fontSize: 11, color: '#999', marginTop: 15, fontStyle: 'italic' },
+  doneButton: { backgroundColor: '#2E7D32', padding: 18, borderRadius: 15, alignItems: 'center', marginBottom: 20 },
+  doneButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }
+  });

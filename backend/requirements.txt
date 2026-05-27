@@ -2,3 +2,6 @@ fastapi
 uvicorn
 tensorflow
 python-multipart
+requests
+python-dotenv
+huggingface_hub
